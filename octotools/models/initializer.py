@@ -32,62 +32,99 @@ class Initializer:
             current_dir = os.path.dirname(current_dir)
         raise Exception("Could not find project root")
         
+    def _find_tools_directories(self) -> List[str]:
+        """Find all directories in sys.path that contain 'tools' in their name."""
+        tools_dirs = []
+        
+        for path in sys.path:
+            if not os.path.exists(path):
+                continue
+                
+            # Check if the path itself contains 'tools'
+            if 'tools' in os.path.basename(path).lower():
+                tools_dirs.append(path)
+                continue
+                
+            # Walk through the path to find subdirectories with 'tools' in the name
+            try:
+                for root, dirs, files in os.walk(path):
+                    for dir_name in dirs:
+                        if 'tools' in dir_name.lower():
+                            tools_dir_path = os.path.join(root, dir_name)
+                            if tools_dir_path not in tools_dirs:
+                                tools_dirs.append(tools_dir_path)
+            except (PermissionError, OSError):
+                # Skip directories we can't access
+                continue
+                
+        return tools_dirs
+
     def load_tools_and_get_metadata(self) -> Dict[str, Any]:
         # Implementation of load_tools_and_get_metadata function
         print("Loading tools and getting metadata...")
         self.toolbox_metadata = {}
         octotools_dir = self.get_project_root()
-        tools_dir = os.path.join(octotools_dir, 'tools')        
-        # print(f"octotools directory: {octotools_dir}")
-        # print(f"Tools directory: {tools_dir}")
         
         # Add the octotools directory and its parent to the Python path
         sys.path.insert(0, octotools_dir)
         sys.path.insert(0, os.path.dirname(octotools_dir))
         print(f"Updated Python path: {sys.path}")
         
-        if not os.path.exists(tools_dir):
-            print(f"Error: Tools directory does not exist: {tools_dir}")
+        # Find all tools directories in sys.path
+        tools_dirs = self._find_tools_directories()
+        print(f"Found tools directories: {tools_dirs}")
+        
+        if not tools_dirs:
+            print("Warning: No tools directories found in sys.path")
             return self.toolbox_metadata
 
-        for root, dirs, files in os.walk(tools_dir):
-            # print(f"\nScanning directory: {root}")
-            if 'tool.py' in files and (self.load_all or os.path.basename(root) in self.available_tools):
-                file = 'tool.py'
-                module_path = os.path.join(root, file)
-                module_name = os.path.splitext(file)[0]
-                relative_path = os.path.relpath(module_path, octotools_dir)
-                import_path = '.'.join(os.path.split(relative_path)).replace(os.sep, '.')[:-3]
+        for tools_dir in tools_dirs:
+            print(f"\n==> Scanning tools directory: {tools_dir}")
+            
+            if not os.path.exists(tools_dir):
+                print(f"Warning: Tools directory does not exist: {tools_dir}")
+                continue
 
-                print(f"\n==> Attempting to import: {import_path}")
-                try:
-                    module = importlib.import_module(import_path)
-                    for name, obj in inspect.getmembers(module):
-                        if inspect.isclass(obj) and name.endswith('Tool') and name != 'BaseTool':
-                            print(f"Found tool class: {name}")
-                            try:
-                                # Check if the tool requires an LLM engine
-                                if hasattr(obj, 'require_llm_engine') and obj.require_llm_engine:
-                                    tool_instance = obj(model_string=self.model_string)
-                                else:
-                                    tool_instance = obj()
-                                
-                                self.toolbox_metadata[name] = {
-                                    'tool_name': getattr(tool_instance, 'tool_name', 'Unknown'),
-                                    'tool_description': getattr(tool_instance, 'tool_description', 'No description'),
-                                    'tool_version': getattr(tool_instance, 'tool_version', 'Unknown'),
-                                    'input_types': getattr(tool_instance, 'input_types', {}),
-                                    'output_type': getattr(tool_instance, 'output_type', 'Unknown'),
-                                    'demo_commands': getattr(tool_instance, 'demo_commands', []),
-                                    'user_metadata': getattr(tool_instance, 'user_metadata', {}), # This is a placeholder for user-defined metadata
-                                    'require_llm_engine': getattr(obj, 'require_llm_engine', False),
-                                }
-                                print(f"Metadata for {name}: {self.toolbox_metadata[name]}")
-                            except Exception as e:
-                                print(f"Error instantiating {name}: {str(e)}")
-                except Exception as e:
-                    print(f"Error loading module {module_name}: {str(e)}")
+            for root, dirs, files in os.walk(tools_dir):
+                # print(f"\nScanning directory: {root}")
+                if 'tool.py' in files and (self.load_all or os.path.basename(root) in self.available_tools):
+                    file = 'tool.py'
+                    module_path = os.path.join(root, file)
+                    module_name = os.path.splitext(file)[0]
                     
+                    # Calculate relative path from the tools directory
+                    relative_path = os.path.relpath(module_path, tools_dir)
+                    import_path = '.'.join(os.path.split(relative_path)).replace(os.sep, '.')[:-3]
+
+                    print(f"\n==> Attempting to import: {import_path}")
+                    try:
+                        module = importlib.import_module(import_path)
+                        for name, obj in inspect.getmembers(module):
+                            if inspect.isclass(obj) and name.endswith('Tool') and name != 'BaseTool':
+                                print(f"Found tool class: {name}")
+                                try:
+                                    # Check if the tool requires an LLM engine
+                                    if hasattr(obj, 'require_llm_engine') and obj.require_llm_engine:
+                                        tool_instance = obj(model_string=self.model_string)
+                                    else:
+                                        tool_instance = obj()
+                                    
+                                    self.toolbox_metadata[name] = {
+                                        'tool_name': getattr(tool_instance, 'tool_name', 'Unknown'),
+                                        'tool_description': getattr(tool_instance, 'tool_description', 'No description'),
+                                        'tool_version': getattr(tool_instance, 'tool_version', 'Unknown'),
+                                        'input_types': getattr(tool_instance, 'input_types', {}),
+                                        'output_type': getattr(tool_instance, 'output_type', 'Unknown'),
+                                        'demo_commands': getattr(tool_instance, 'demo_commands', []),
+                                        'user_metadata': getattr(tool_instance, 'user_metadata', {}), # This is a placeholder for user-defined metadata
+                                        'require_llm_engine': getattr(obj, 'require_llm_engine', False),
+                                    }
+                                    print(f"Metadata for {name}: {self.toolbox_metadata[name]}")
+                                except Exception as e:
+                                    print(f"Error instantiating {name}: {str(e)}")
+                    except Exception as e:
+                        print(f"Error loading module {module_name}: {str(e)}")
+                        
         print(f"\n==> Total number of tools imported: {len(self.toolbox_metadata)}")
 
         return self.toolbox_metadata
