@@ -21,7 +21,7 @@ class Initializer:
         self._set_up_tools()
         
         # if vllm, set up the vllm server
-        if model_string.startswith("vllm-"):
+        if model_string and model_string.startswith("vllm-"):
             self.setup_vllm_server()
 
     def get_project_root(self):
@@ -40,16 +40,15 @@ class Initializer:
             if not os.path.exists(path):
                 continue
                 
-            # Check if the path itself contains 'tools'
-            if 'tools' in os.path.basename(path).lower():
+            # Check if the path itself contains 'octotools/tools'
+            if 'octotools/tools' in os.path.basename(path).lower():
                 tools_dirs.append(path)
-                continue
                 
             # Walk through the path to find subdirectories with 'tools' in the name
             try:
                 for root, dirs, files in os.walk(path):
                     for dir_name in dirs:
-                        if 'tools' in dir_name.lower():
+                        if 'octotools/tools' in dir_name.lower():
                             tools_dir_path = os.path.join(root, dir_name)
                             if tools_dir_path not in tools_dirs:
                                 tools_dirs.append(tools_dir_path)
@@ -68,6 +67,15 @@ class Initializer:
         # Add the octotools directory and its parent to the Python path
         sys.path.insert(0, octotools_dir)
         sys.path.insert(0, os.path.dirname(octotools_dir))
+        
+        # Also add the current working directory and modules directory
+        current_dir = os.getcwd()
+        sys.path.insert(0, current_dir)
+        
+        modules_dir = os.path.join(current_dir, 'modules')
+        if os.path.exists(modules_dir):
+            sys.path.insert(0, modules_dir)
+        
         print(f"Updated Python path: {sys.path}")
         
         # Find all tools directories in sys.path
@@ -94,7 +102,12 @@ class Initializer:
                     
                     # Calculate relative path from the tools directory
                     relative_path = os.path.relpath(module_path, tools_dir)
-                    import_path = '.'.join(os.path.split(relative_path)).replace(os.sep, '.')[:-3]
+                    # Remove the .py extension and convert path separators to dots
+                    import_path = os.path.splitext(relative_path)[0].replace(os.sep, '.')
+                    
+                    # If the tools directory is not the current directory, prepend the tools directory name
+                    if os.path.basename(tools_dir) != '.':
+                        import_path = f"{os.path.basename(tools_dir)}.{import_path}"
 
                     print(f"\n==> Attempting to import: {import_path}")
                     try:
@@ -137,15 +150,46 @@ class Initializer:
             print(f"Checking availability of {tool_name}...")
 
             try:
-                # Import the tool module
-                module_name = f"tools.{tool_name.lower().replace('_tool', '')}.tool"
-                module = importlib.import_module(module_name)
+                # Find the tool module using the same logic as load_tools_and_get_metadata
+                tools_dirs = self._find_tools_directories()
+                module_found = False
+                
+                for tools_dir in tools_dirs:
+                    for root, dirs, files in os.walk(tools_dir):
+                        if 'tool.py' in files and os.path.basename(root) == tool_name.lower().replace('_tool', ''):
+                            # Calculate import path using the same logic as load_tools_and_get_metadata
+                            module_path = os.path.join(root, 'tool.py')
+                            relative_path = os.path.relpath(module_path, tools_dir)
+                            import_path = os.path.splitext(relative_path)[0].replace(os.sep, '.')
+                            
+                            # If the tools directory is not the current directory, prepend the tools directory name
+                            if os.path.basename(tools_dir) != '.':
+                                import_path = f"{os.path.basename(tools_dir)}.{import_path}"
+                            
+                            module = importlib.import_module(import_path)
+                            module_found = True
+                            break
+                    if module_found:
+                        break
+
+                if not module_found:
+                    raise ImportError(f"Could not find module for {tool_name}")
 
                 # Get the tool class
-                tool_class = getattr(module, tool_name)
+                tool_class = None
+                for name, obj in inspect.getmembers(module):
+                    if inspect.isclass(obj) and name == tool_name:
+                        tool_class = obj
+                        break
+
+                if tool_class is None:
+                    raise AttributeError(f"Could not find tool class {tool_name} in module")
 
                 # Instantiate the tool
-                tool_instance = tool_class()
+                if hasattr(tool_class, 'require_llm_engine') and tool_class.require_llm_engine:
+                    tool_instance = tool_class(model_string=self.model_string)
+                else:
+                    tool_instance = tool_class()
 
                 # FIXME This is a temporary workaround to avoid running demo commands
                 self.available_tools.append(tool_name)
