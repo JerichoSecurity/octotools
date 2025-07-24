@@ -21,8 +21,7 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["octotools"]
+where = ["octotools"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
