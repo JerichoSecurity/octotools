@@ -204,7 +204,7 @@ Remember: Your response MUST end with the Generated Command, which should be val
                 signal.alarm(0)  # Ensure alarm is disabled even if other exceptions occur
 
         # Import the tool module and instantiate it
-        module_name = f"tools.{tool_name.lower().replace('_tool', '')}.tool"
+        module_name = f"modules.octotools.tools.{tool_name.lower().replace('_tool', '')}.tool"
 
         try:
             # Dynamically import the module
